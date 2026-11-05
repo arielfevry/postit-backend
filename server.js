@@ -8,6 +8,8 @@ app.use(express.json());
 // login API route
 const authRoutes = require('./routes/auth');
 app.use('/api', authRoutes);
+app.use('/api/users', require('./routes/users'));
+app.use('/api/boards', require('./routes/boards'));
 
 // Item CRUD API routes
 const itemRoutes = require('./routes/items');

@@ -8,6 +8,7 @@ const boardSchema = new mongoose.Schema(
 	background_image: { type: String,
 		trim: true,
 		default: ""},
+	ownerId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
 	userIds: [
 	{
 		type: mongoose.Schema.Types.ObjectId,
