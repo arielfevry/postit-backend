@@ -1,25 +1,50 @@
 
 const Item = require('../models/Item');
+const Board = require('../models/Board');
 const mongoose = require('mongoose');
+
+const validRequestId = id => typeof id === 'string' && mongoose.isObjectIdOrHexString(id);
+const canAccessBoard = (boardId, userId) => Board.exists({
+  _id: boardId,
+  $or: [{ ownerId: userId }, { userIds: userId }]
+});
+
+// Resolve the Item first, then authorize its actual Board; never trust a body boardId.
+async function accessibleItem(id, userId) {
+  const item = await Item.findById(id).select('boardId userId');
+  if (!item || !mongoose.isObjectIdOrHexString(item.boardId)) return null;
+  return await canAccessBoard(item.boardId, userId) ? item : null;
+}
 
 // ==========================================
 // CREATE ITEM - POST /api/items
 // ==========================================
 const createItem = async (req, res) => {
+  if (!req.user?.id) return res.status(401).json({ message: 'Authentication required' });
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    return res.status(400).json({ message: 'Request body must be a JSON object' });
+  }
+  const { boardId, type, content } = req.body;
+  if (!validRequestId(boardId)) {
+    return res.status(400).json({ message: 'boardId must be a valid MongoDB ObjectId' });
+  }
   try {
-    const { boardId, userId, type, content } = req.body || {};
 
     // Validate required fields
-    if (!boardId || !userId || content == null) {
+    if (content == null) {
       return res.status(400).json({
-        message: 'boardId, userId, and content are required'
+        message: 'boardId and content are required'
       });
+    }
+
+    if (!await canAccessBoard(boardId, req.user.id)) {
+      return res.status(404).json({ message: 'Board not found' });
     }
 
     // Create a new sticky note
     const item = await Item.create({
       boardId,
-      userId,
+      userId: req.user.id,
       type,
       content
     });
@@ -40,7 +65,7 @@ const createItem = async (req, res) => {
       });
     }
 
-    console.error('Create item error:', error);
+    console.error('Create item failed');
 
     return res.status(500).json({
       message: 'Internal server error'
@@ -52,7 +77,8 @@ const createItem = async (req, res) => {
 // READ ITEMS - GET /api/items?boardId=...
 // ==========================================
 const getItems = async (req, res) => {
-  const { boardId } = req.query;
+  if (!req.user?.id) return res.status(401).json({ message: 'Authentication required' });
+  const { boardId } = req.query || {};
 
   // Validate boardId
   if (typeof boardId !== 'string' || boardId.trim() === '') {
@@ -61,13 +87,17 @@ const getItems = async (req, res) => {
     });
   }
 
-  if (!mongoose.isObjectIdOrHexString(boardId)) {
+  if (!validRequestId(boardId)) {
     return res.status(400).json({
       message: 'boardId must be a valid MongoDB ObjectId'
     });
   }
 
   try {
+    if (!await canAccessBoard(boardId, req.user.id)) {
+      return res.status(404).json({ message: 'Board not found' });
+    }
+
     // Find all items belonging to this board
     const items = await Item.find({ boardId });
 
@@ -77,7 +107,7 @@ const getItems = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get items error:', error);
+    console.error('Get items failed');
 
     return res.status(500).json({
       message: 'Internal server error'
@@ -89,10 +119,11 @@ const getItems = async (req, res) => {
 // UPDATE ITEM - PUT /api/items/:id
 // ==========================================
 const updateItem = async (req, res) => {
+  if (!req.user?.id) return res.status(401).json({ message: 'Authentication required' });
   const { id } = req.params;
 
   // Step 1: Validate Item ID
-  if (!mongoose.isObjectIdOrHexString(id)) {
+  if (!validRequestId(id)) {
     return res.status(400).json({
       message: 'Item ID must be a valid MongoDB ObjectId'
     });
@@ -147,8 +178,12 @@ const updateItem = async (req, res) => {
 
   // Step 4: Update item in MongoDB
   try {
-    const item = await Item.findByIdAndUpdate(
-      id,
+    const current = await accessibleItem(id, req.user.id);
+    if (!current) return res.status(404).json({ message: 'Item not found' });
+    // Bind the write to the Board and creator that were checked. A concurrently
+    // moved/replaced Item must be reauthorized rather than modified by ID alone.
+    const item = await Item.findOneAndUpdate(
+      { _id: id, boardId: current.boardId, userId: current.userId },
       { $set: updates },
       {
         returnDocument: 'after',
@@ -180,7 +215,7 @@ const updateItem = async (req, res) => {
       });
     }
 
-    console.error('Update item error:', error);
+    console.error('Update item failed');
 
     return res.status(500).json({
       message: 'Internal server error'
@@ -192,10 +227,11 @@ const updateItem = async (req, res) => {
 // DELETE ITEM - DELETE /api/items/:id
 // ==========================================
 const deleteItem = async (req, res) => {
+  if (!req.user?.id) return res.status(401).json({ message: 'Authentication required' });
   const { id } = req.params;
 
   // Step 1: Validate Item ID
-  if (!mongoose.isObjectIdOrHexString(id)) {
+  if (!validRequestId(id)) {
     return res.status(400).json({
       message: 'Item ID must be a valid MongoDB ObjectId'
     });
@@ -203,7 +239,9 @@ const deleteItem = async (req, res) => {
 
   // Step 2: Delete item from MongoDB
   try {
-    const item = await Item.findByIdAndDelete(id);
+    const current = await accessibleItem(id, req.user.id);
+    if (!current) return res.status(404).json({ message: 'Item not found' });
+    const item = await Item.findOneAndDelete({ _id: id, boardId: current.boardId, userId: current.userId });
 
     // Item does not exist
     if (!item) {
@@ -218,7 +256,7 @@ const deleteItem = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Delete item error:', error);
+    console.error('Delete item failed');
 
     return res.status(500).json({
       message: 'Internal server error'

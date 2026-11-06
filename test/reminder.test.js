@@ -112,7 +112,7 @@ test('server startup preserves route mounts and ping, worker disabled by default
  const express=()=>app;express.json=()=> 'json';
  load('server.js',{
    express,cors:()=> 'cors',mongoose:{connect(){return Promise.resolve();},connection:{readyState:1}},
-   './routes/auth':'auth','./routes/items':'items','./routes/reminders':'reminders'
+   './routes/auth':'auth', './routes/users':'users', './routes/boards':'boards', './routes/items':'items', './routes/reminders':'reminders'
  });
  await new Promise(resolve=>setImmediate(resolve));
  assert.ok(listened);assert.ok(mounts.some(args=>args[0]==='/api'&&args[1]==='auth'));
@@ -152,7 +152,7 @@ test('enabled API worker starts only after connection and index readiness',async
  const app={use(){},get(){},listen(){}};const express=()=>app;express.json=()=>({});
  load('server.js',{
   express,cors:()=>({}),mongoose:{connect(){events.push('connect');return Promise.resolve();}},
-  './routes/auth':{},'./routes/items':{},'./routes/reminders':{},
+  './routes/auth':{}, './routes/users':{}, './routes/boards':{}, './routes/items':{},'./routes/reminders':{},
   './models/Reminder':{async init(){events.push('indexes');}},
   './workers/reminderWorker':{createReminderWorker(){events.push('create');return {start(){events.push('start');}};}}
  },{REMINDER_WORKER_ENABLED:'true'});
