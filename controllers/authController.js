@@ -1,5 +1,6 @@
 const User = require('../models/User');
-const bcrypt = require('bcryptjs')
+const bcrypt = require('bcryptjs');
+const { signAccessToken } = require('../lib/jwt');
 
 //login api
 const login = async(req, res) => {
@@ -30,8 +31,10 @@ const login = async(req, res) => {
         }
 
         //successful login
+        const token = signAccessToken(user._id);
         return res.status(200).json({
             message: 'Login successful',
+            token,
             user:{
                 id: user._id,
                 name: user.name,
@@ -41,7 +44,7 @@ const login = async(req, res) => {
   
     } catch (error)
     {
-        console.error('Login error:', error);
+        console.error('Login failed');
 
         return res.status(500).json({
             error: 'Internal server error'
