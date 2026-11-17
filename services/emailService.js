@@ -11,7 +11,7 @@ function createEmailService({ env = process.env, client } = {}) {
     const [response] = await mail.send({
       to: reminder.recipient,
       from: env.SENDGRID_FROM_EMAIL,
-      subject: 'PostIt reminder',
+      subject: reminder.subject ?? 'PostIt reminder',
       text: reminder.message
     });
     if (!response || response.statusCode !== 202) {

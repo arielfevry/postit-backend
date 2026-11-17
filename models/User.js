@@ -11,6 +11,9 @@ const userSchema = new mongoose.Schema(
 		unique: true,
 		lowercase: true},
 	password: { type: String, required: true},
+	passwordResetDigest: { type: String, select: false, index: { sparse: true } },
+	passwordResetExpiresAt: { type: Date, select: false },
+	passwordResetRequestedAt: { type: Date, select: false },
 	friends: [
 	{
 		type: mongoose.Schema.Types.ObjectId,

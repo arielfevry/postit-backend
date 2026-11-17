@@ -65,6 +65,12 @@ function fixture() {
   let lastDelete;
   const User = {
     async exists(query) { if (state.existsError) throw Error('private database error'); return users.some(row => matches(row, query)); },
+    findOne(filter) {
+      return { select(fields) {
+        assert.equal(fields, 'name email');
+        return { async lean() { return users.find(row => matches(row, filter)) || null; } };
+      } };
+    },
     findById(id) {
       loadCalls++;
       return { async select(fields) {
@@ -107,7 +113,7 @@ function fixture() {
     '../models/User': User, '../lib/jwt': { verifyAccessToken: token => verifyAccessToken(token, config), JwtConfigurationError }
   });
   const loader = load('middleware/loadAuthenticatedUser.js', { mongoose, '../models/User': User });
-  const userController = load('controllers/userController.js', { bcryptjs: bcrypt, mongoose,
+  const userController = load('controllers/userController.js', { bcryptjs: bcrypt, mongoose, validator: require('validator'),
     '../models/User': User, '../models/Board': Board, '../models/Item': Item });
   const boardController = load('controllers/boardController.js', { mongoose, '../models/Board': Board, '../models/Item': Item });
   function req({ userId = ownerId, header = 'Bearer ' + signAccessToken(ownerId, config), params = {}, body = {}, method = 'GET' } = {}) {
@@ -177,6 +183,21 @@ test('authentication and user-loading database errors return generic 500 without
     assert.equal(res.code, 500); assert.equal(res.body.message, 'Internal server error');
     assert.equal(JSON.stringify(res.body).includes('private'), false);
   }
+});
+
+test('authenticated email search normalizes exact addresses and returns only public profile fields', async () => {
+  const f = fixture();
+  async function search(email, req = f.req()) {
+    return dispatch([...f.stack, f.userController.searchUser], { ...req, query: { email } });
+  }
+  assert.equal((await search('user1@example.com', f.req({ header: '' }))).code, 401);
+  assert.equal((await search(['user1@example.com'])).code, 400);
+  assert.equal((await search('missing@example.com')).code, 404);
+  const result = await search(' USER1@example.com ');
+  assert.equal(result.code, 200);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.body)), {
+    user: { id: otherId, name: 'User 1', email: 'user1@example.com' }
+  });
 });
 
 test('User GET returns only profile fields; other-user operations remain forbidden', async () => {
@@ -264,7 +285,12 @@ test('User and Board routers install JWT then loader before existing authorizati
   const f = fixture();
   const authenticate = f.authenticate; const loader = f.loader;
   let userPath; let userChain; const userRoutes = {};
-  const userRouter = { route(path) { userPath = path; return {
+  const userRouter = {
+    get(path, ...handlers) {
+      assert.equal(path, '/search');
+      assert.deepEqual(handlers, [authenticate, loader, f.userController.searchUser]);
+    },
+    route(path) { userPath = path; return {
     all(...handlers) { userChain = handlers; return this; },
     get(handler) { userRoutes.get = handler; return this; },
     patch(handler) { userRoutes.patch = handler; return this; },
