@@ -4,7 +4,7 @@ const authenticate = require('../middleware/authenticate');
 const loadAuthenticatedUser = require('../middleware/loadAuthenticatedUser');
 
 const {
-    boardFields, validateBoardId, createBoard, listBoards, getBoard, updateBoard, deleteBoard,
+    boardFields, validateBoardId, createBoard, listBoards, getBoard, updateBoard, addBoardUser, deleteBoard,
 } = require('../controllers/boardController');
 
 const router = express.Router();
@@ -13,6 +13,9 @@ router.use(authenticate, loadAuthenticatedUser);
 router.route('/')
     .get(listBoards)
     .post(boardFields, createBoard);
+router.route('/:boardId/users')
+    .all(validateBoardId)
+    .post(addBoardUser);
 router.route('/:boardId')
     .all(validateBoardId)
     .get(getBoard)

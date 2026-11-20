@@ -100,7 +100,9 @@ function fixture() {
     async exists(filter) { return boards.some(row => matches(row, filter)); },
     async findOneAndUpdate(filter, update) {
       const board = boards.find(row => matches(row, filter));
-      if (board) board.set(update.$set); return board || null;
+      if (board && update.$set) board.set(update.$set);
+      if (board && update.$addToSet) board.userIds.addToSet(update.$addToSet.userIds);
+      return board || null;
     },
     async deleteOne(filter) {
       const index = boards.findIndex(row => matches(row, filter));
@@ -115,7 +117,7 @@ function fixture() {
   const loader = load('middleware/loadAuthenticatedUser.js', { mongoose, '../models/User': User });
   const userController = load('controllers/userController.js', { bcryptjs: bcrypt, mongoose, validator: require('validator'),
     '../models/User': User, '../models/Board': Board, '../models/Item': Item });
-  const boardController = load('controllers/boardController.js', { mongoose, '../models/Board': Board, '../models/Item': Item });
+  const boardController = load('controllers/boardController.js', { mongoose, '../models/Board': Board, '../models/Item': Item, '../models/User': User });
   function req({ userId = ownerId, header = 'Bearer ' + signAccessToken(ownerId, config), params = {}, body = {}, method = 'GET' } = {}) {
     return { get: () => header, params: { userId, ...params }, body, method };
   }
@@ -310,8 +312,52 @@ test('User and Board routers install JWT then loader before existing authorizati
     '../middleware/authenticate': authenticate, '../middleware/loadAuthenticatedUser': loader });
   assert.equal(uses[0][0], authenticate); assert.equal(uses[0][1], loader);
   assert.equal(routes[0].get[0], f.boardController.listBoards); assert.equal(routes[0].post[1], f.boardController.createBoard);
+  assert.equal(routes[1].path, '/:boardId/users');
   assert.equal(routes[1].all[0], f.boardController.validateBoardId);
-  assert.equal(routes[1].get[0], f.boardController.getBoard); assert.equal(routes[1].patch[1], f.boardController.updateBoard); assert.equal(routes[1].delete[0], f.boardController.deleteBoard);
+  assert.equal(routes[1].post[0], f.boardController.addBoardUser);
+  assert.equal(routes[2].all[0], f.boardController.validateBoardId);
+  assert.equal(routes[2].get[0], f.boardController.getBoard); assert.equal(routes[2].patch[1], f.boardController.updateBoard); assert.equal(routes[2].delete[0], f.boardController.deleteBoard);
+});
+
+test('board sharing requires the owner and adds an existing member only once', async () => {
+  const f = fixture();
+  const created = await f.boardAction('createBoard', { method: 'POST', body: { title: 'Shared board' } });
+  const params = { boardId: created.body.board.id };
+  const share = (body, header) => f.boardAction('addBoardUser', {
+    params, body, method: 'POST', ...(header === undefined ? {} : { header })
+  });
+  assert.equal((await share({ userId: otherId }, '')).code, 401);
+  assert.equal((await share({ userId: otherId }, 'Bearer ' + signAccessToken(otherId, config))).code, 404);
+  for (const userId of [undefined, null, 123, 'bad', { $ne: null }, [otherId]]) {
+    assert.equal((await share({ userId })).code, 400);
+  }
+  assert.equal((await share({ userId: 'cccccccccccccccccccccccc' })).code, 404);
+  const results = await Promise.all([share({ userId: otherId }), share({ userId: otherId })]);
+  for (const result of results) {
+    assert.equal(result.code, 200);
+    assert.equal(result.body.board.userIds.filter(id => String(id) === otherId).length, 1);
+    assert.equal(result.body.board.ownerId.toString(), ownerId);
+    assert.equal(JSON.stringify(result.body).includes('password'), false);
+  }
+  const member = { params, header: 'Bearer ' + signAccessToken(otherId, config) };
+  assert.equal((await f.boardAction('getBoard', member)).code, 200);
+  assert.equal((await f.boardAction('updateBoard', { ...member, body: { title: 'Changed' } })).code, 404);
+  assert.equal((await share({ userId: ownerId }, member.header)).code, 404);
+  assert.equal((await share({ userId: ownerId })).body.board.userIds.length, 2);
+  f.boards[0].ownerId = undefined;
+  assert.equal((await share({ userId: otherId })).code, 404);
+});
+
+test('board sharing rejects an invalid board ID and handles database errors through Express', async () => {
+  const f = fixture();
+  const invalid = await f.boardAction('addBoardUser', { params: { boardId: 'invalid' }, body: { userId: otherId } });
+  assert.equal(invalid.code, 400);
+  const created = await f.boardAction('createBoard', { method: 'POST', body: { title: 'Shared' } });
+  f.state.existsError = true;
+  // Call after authentication to exercise the target-user lookup failure.
+  await assert.rejects(f.boardController.addBoardUser({
+    params: { boardId: created.body.board.id }, body: { userId: otherId }, user: f.users[0]
+  }, response()));
 });
 
 test('Reminder POST remains compatible with JWT id identity and does not require the CRUD loader', async () => {
