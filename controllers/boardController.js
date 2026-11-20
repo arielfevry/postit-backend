@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Board = require('../models/Board');
 const Item = require('../models/Item');
+const User = require('../models/User');
 
 function boardFields(req, res, next) {
     const { title, background_image } = req.body || {};
@@ -68,6 +69,28 @@ async function updateBoard(req, res) {
     return res.json({ board });
 }
 
+async function addBoardUser(req, res) {
+    const { userId } = req.body || {};
+    if (typeof userId !== 'string' || !mongoose.isObjectIdOrHexString(userId)) {
+        return res.status(400).json({ error: 'A valid user ID is required' });
+    }
+
+    const filter = { _id: req.params.boardId, ownerId: req.user._id };
+    if (!(await Board.exists(filter))) return boardNotFound(res);
+    if (!(await User.exists({ _id: userId }))) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Add the user once, even if two requests arrive at the same time.
+    const board = await Board.findOneAndUpdate(
+        filter,
+        { $addToSet: { userIds: userId } },
+        { returnDocument: 'after', runValidators: true }
+    );
+    if (!board) return boardNotFound(res);
+    return res.json({ board });
+}
+
 async function deleteBoard(req, res) {
     const filter = { _id: req.params.boardId, ownerId: req.user._id };
     if (!(await Board.exists(filter))) return boardNotFound(res);
@@ -81,4 +104,4 @@ async function deleteBoard(req, res) {
     return res.status(204).end();
 }
 
-module.exports = { boardFields, validateBoardId, createBoard, listBoards, getBoard, updateBoard, deleteBoard };
+module.exports = { boardFields, validateBoardId, createBoard, listBoards, getBoard, updateBoard, addBoardUser, deleteBoard };

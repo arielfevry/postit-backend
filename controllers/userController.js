@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
+const { isEmail } = require('validator');
 const User = require('../models/User');
 const Board = require('../models/Board');
 const Item = require('../models/Item');
@@ -54,6 +55,23 @@ function getUser(req, res) {
     return res.json({ user: profile(req.user) });
 }
 
+async function searchUser(req, res) {
+    const email = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : '';
+    if (!isEmail(email)) {
+        return res.status(400).json({ error: 'A valid email is required' });
+    }
+
+    try {
+        const user = await User.findOne({ email }).select('name email').lean();
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        return res.json({ user: { id: user._id, name: user.name, email: user.email } });
+    } catch {
+        console.error('User search failed');
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+
 async function updateUser(req, res) {
     const { name, email, password } = req.body || {};
     const changes = {};
@@ -84,9 +102,13 @@ async function updateUser(req, res) {
     try {
         if (password !== undefined) changes.password = await bcrypt.hash(password, 12);
 
+        const update = { $set: changes };
+        if (changes.email || changes.password) {
+            update.$unset = { passwordResetDigest: '', passwordResetExpiresAt: '' };
+        }
         const user = await User.findOneAndUpdate(
             { _id: req.user._id, password: req.user.password },
-            { $set: changes },
+            update,
             { returnDocument: 'after', runValidators: true }
         );
         if (!user) return res.status(409).json({ error: 'Account changed. Retry with your current credentials.' });
@@ -121,4 +143,4 @@ async function deleteUser(req, res) {
     }
 }
 
-module.exports = { authenticate, authorizeSelf, getUser, updateUser, deleteUser };
+module.exports = { authenticate, authorizeSelf, searchUser, getUser, updateUser, deleteUser };
